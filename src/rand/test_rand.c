@@ -12,7 +12,6 @@ struct rand_testcase {
 /* Add new testcases here */
 struct rand_testcase rand_testcases[] = {
 	{ OQS_RAND_alg_urandom_chacha20 },
-	{ OQS_RAND_alg_urandom_aesctr},
 };
 
 #define RAND_TEST_ITERATIONS 10000000L
