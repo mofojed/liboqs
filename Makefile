@@ -60,6 +60,7 @@ links:
 	$(LN) ../../src/kex_rlwe_newhope/kex_rlwe_newhope.h include/oqs
 	$(LN) ../../src/kex_lwe_frodo/kex_lwe_frodo.h include/oqs
 	$(LN) ../../src/rand/rand.h include/oqs
+	$(LN) ../../src/mem/mem.h include/oqs
 	$(LN) ../../src/rand_urandom_chacha20/rand_urandom_chacha20.h include/oqs
 	$(LN) ../../src/rand_urandom_aesctr/rand_urandom_aesctr.h include/oqs
 
@@ -73,6 +74,9 @@ $(RAND_URANDOM_AESCTR_OBJS): src/rand_urandom_aesctr/rand_urandom_aesctr.h
 
 # RAND
 objs/rand/rand.o: src/rand/rand.h
+
+# MEM
+objs/mem/mem.o: src/mem/mem.h
 
 # KEX_RLWE_BCNS15
 KEX_RLWE_BCNS15_OBJS := $(addprefix objs/kex_rlwe_bcns15/, fft.o kex_rlwe_bcns15.o rlwe.o rlwe_kex.o)
@@ -101,13 +105,14 @@ objs/kex/kex.o: src/kex/kex.h
 
 RAND_OBJS := $(RAND_URANDOM_AESCTR_OBJS) $(RAND_URANDOM_CHACHA_OBJS)
 
-lib: $(RAND_OBJS) $(KEX_RLWE_BCNS15_OBJS) $(KEX_RLWE_NEWHOPE_OBJS) $(KEX_LWE_FRODO_OBJS) objs/rand/rand.o objs/kex/kex.o $(AES_OBJS)
+lib: $(RAND_OBJS) $(KEX_RLWE_BCNS15_OBJS) $(KEX_RLWE_NEWHOPE_OBJS) $(KEX_LWE_FRODO_OBJS) objs/rand/rand.o objs/mem/mem.o objs/kex/kex.o $(AES_OBJS)
 	rm -f liboqs.a
 	$(AR) liboqs.a $^
 	$(RANLIB) liboqs.a
 
-tests: lib src/rand/test_rand.c src/kex/test_kex.c src/aes/test_aes.c src/ds_benchmark.h
+tests: lib src/mem/test_mem.c src/rand/test_rand.c src/kex/test_kex.c src/aes/test_aes.c src/ds_benchmark.h
 	$(CC) $(CFLAGS) $(INCLUDES) -L. src/rand/test_rand.c -loqs $(LDFLAGS) -o test_rand 
+	$(CC) $(CFLAGS) $(INCLUDES) -L. src/mem/test_mem.c -loqs $(LDFLAGS) -o test_mem 
 	$(CC) $(CFLAGS) $(INCLUDES) -L. src/kex/test_kex.c -loqs $(LDFLAGS) -o test_kex
 	$(CC) $(CFLAGS) $(INCLUDES) -L. src/aes/test_aes.c -loqs $(LDFLAGS) -o test_aes
 
@@ -118,10 +123,11 @@ check: links tests
 	./test_kex
 	./test_rand
 	./test_aes
+	./test_mem
 
 clean:
 	rm -rf docs objs include
-	rm -f test_rand test_kex test_aes liboqs.a
+	rm -f test_rand test_kex test_aes test_mem liboqs.a
 	find . -name .DS_Store -type f -delete
 
 prettyprint:

@@ -13,6 +13,7 @@
 
 #include <oqs/kex.h>
 #include <oqs/rand.h>
+#include <oqs/mem.h>
 
 #include "kex_lwe_frodo.h"
 #include "local.h"
@@ -107,8 +108,11 @@ OQS_KEX *OQS_KEX_lwe_frodo_new(OQS_RAND *rand, const uint8_t *seed, const size_t
 err:
 	if (k) {
 		if (k->params) {
+			OQS_MEM_clean(params->cdf_table, params->cdf_table_len);
 			free(params->cdf_table);
+			OQS_MEM_clean(params->seed, params->seed_len);
 			free(params->seed);
+			OQS_MEM_clean(params->param_name, strlen(params->param_name));
 			free(params->param_name);
 			free(k->params);
 		}
