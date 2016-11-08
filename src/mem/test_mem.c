@@ -112,8 +112,12 @@ static char *mem_test_clean(OQS_MEM_clean_func mem_clean) {
   
   char *res = memmem(altstack, sizeof(altstack), buf, sizeof(buf));
   
-  if (NULL != res && NULL != mem_clean) {
+  if (NULL != mem_clean) {
     mem_clean(buf, sizeof(buf));
+  } else {
+    // Fallback to memset
+    // With optimizations enabled, this (should) get optimized out
+    memset(buf, 0, sizeof(buf));
   }
   return res;
 }
@@ -121,7 +125,7 @@ static char *mem_test_clean(OQS_MEM_clean_func mem_clean) {
 // Test check to verify the secret is where we expect it to be if things aren't zero'ed out
 static int mem_test_correctness_noclean() {
   printf("No Clean\t");
-
+#ifdef __OPTIMIZE__
   char *buf = mem_test_clean(NULL);
   
   if (0 == memcmp(buf, secret, sizeof(secret))) {
@@ -131,6 +135,10 @@ static int mem_test_correctness_noclean() {
     printf("FAILED\n");
     return 0;
   }
+#else
+  printf("SKIPPED (no optimizations)\n");
+  return 1;
+#endif
 }
 
 static int mem_test_correctness_clean(enum OQS_MEM_alg_name alg_name, const char *name) {  
