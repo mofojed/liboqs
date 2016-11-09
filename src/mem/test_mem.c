@@ -1,4 +1,6 @@
 #include <assert.h>
+#include <errno.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -37,98 +39,96 @@ struct mem_testcase mem_testcases[] = {
 #define MEM_TEST_LARGE_BLOCK_SIZE 0x1000000L
 #define MEM_BENCH_SECONDS 1
 
-
-// Memory stack inspection 
-// https://github.com/jpouellet/signify-osx/blob/master/src/regress/lib/libc/explicit_bzero/explicit_bzero.c
+/** The secret that we write out to the stack. After cleaning, we shouldn't be able to find it in our stack */
 static const char secret[24] = {
   0x4e, 0x65, 0x76, 0x65, 0x72, 0x20, 0x67, 0x6f, 
   0x6e, 0x6e, 0x61, 0x20, 0x67, 0x69, 0x76, 0x65, 
   0x20, 0x79, 0x6f, 0x75, 0x20, 0x75, 0x70, 0x2c,
 };
 
-static char altstack[SIGSTKSZ + sizeof(secret)];
+/* Number of times to write the secret */
+#define MEM_STACK_SIZE (SIGSTKSZ + sizeof(secret))
 
-static void setup_stack(void) {
-  const stack_t sigstk = {
-    .ss_sp = altstack,
-    .ss_size = sizeof(altstack),
+/** Memory allocated for our stack */
+static char stack_buf[MEM_STACK_SIZE];
+
+/** Verify that we're on the custom stack */
+static void assert_on_stack(void) {
+  stack_t current_stack;
+  assert(0 == sigaltstack(NULL, &current_stack));
+  assert(SS_ONSTACK == (current_stack.ss_flags & SS_ONSTACK));
+}
+
+/** Call the provided signal handler on a custom stack */
+static void call_on_stack(void (*fn)(int)) {
+  const stack_t stack = {
+    .ss_sp = stack_buf,
+    .ss_size = sizeof(stack_buf),
   };
 
-  assert(0 == sigaltstack(&sigstk, NULL));
-}
-
-static void assert_on_stack(void) {
-  stack_t cursigstk;
-  assert(0 == sigaltstack(NULL, &cursigstk));
-  assert(SS_ONSTACK == (cursigstk.ss_flags & (SS_DISABLE|SS_ONSTACK)));
-}
-
-
-static void call_on_stack(void (*fn)(int)) {
-  /*
-   * This is a bit more complicated than strictly necessary, but
-   * it ensures we don't have any flaky test failures due to
-   * inherited signal masks/actions/etc.
-   *
-   * On systems where SA_ONSTACK is not supported, this could
-   * alternatively be implemented using makecontext() or
-   * pthread_attr_setstack().
-   */
-
-  const struct sigaction sigact = {
+  const struct sigaction action = {
     .sa_handler = fn,
     .sa_flags = SA_ONSTACK,
   };
 
-  struct sigaction oldsigact;
-  sigset_t sigset, oldsigset;
+  stack_t old_stack;
+  struct sigaction old_action;
 
-  /* First, block all signals. */
-  assert(0 == sigemptyset(&sigset));
-  assert(0 == sigfillset(&sigset));
-  assert(0 == sigprocmask(SIG_BLOCK, &sigset, &oldsigset));
-
-  /* Next setup the signal handler for SIGUSR1. */
-  assert(0 == sigaction(SIGUSR1, &sigact, &oldsigact));
-
-  /* Raise SIGUSR1 and momentarily unblock it to run the handler. */
+  // Set up the stack and signal handler
+  assert(0 == sigaltstack(&stack, &old_stack));
+  assert(0 == sigaction(SIGUSR1, &action, &old_action));
+  
+  // Raise the signal. This will only return after the signal handler has returned
   assert(0 == raise(SIGUSR1));
-  assert(0 == sigdelset(&sigset, SIGUSR1));
-  assert(-1 == sigsuspend(&sigset));
 
-  /* Restore the original signal action, stack, and mask. */
-  assert(0 == sigaction(SIGUSR1, &oldsigact, NULL));
-  assert(0 == sigprocmask(SIG_SETMASK, &oldsigset, NULL));
+  // Restore the previouse state, disable our alt stack
+  sigaction(SIGUSR1, &old_action, NULL);
+  sigaltstack(&old_stack, NULL);
 }
 
-static void write_secret(char *buf, size_t len) {
-  memcpy(buf, secret, len);
-}
-
+/** 
+ * Test a provided memory clean algorithm. Must be called from the custom stack.
+ * First writes the secret to the stack, then runs the provided cleaning algorithm.
+ * If no cleaning algorithm is provided, just falls back to using memset.
+ * 
+ * Returns the address of where the secret was written. If memory cleaning was successful,
+ * the secret should no longer be readable.
+ */
 static char *mem_test_clean(OQS_MEM_clean_func mem_clean) {
   char buf[sizeof(secret)];
+  char *res;
 
-  write_secret(buf, sizeof(buf));
-  
-  char *res = memmem(altstack, sizeof(altstack), buf, sizeof(buf));
+  assert_on_stack();
+
+  memcpy(buf, secret, sizeof(secret));
+
+  res = memmem(stack_buf, MEM_STACK_SIZE, buf, sizeof(buf));
   
   if (NULL != mem_clean) {
     mem_clean(buf, sizeof(buf));
   } else {
     // Fallback to memset
-    // With optimizations enabled, this (should) get optimized out
+    // With optimizations enabled, this gets optimized out
     memset(buf, 0, sizeof(buf));
   }
+
   return res;
 }
 
-// Test check to verify the secret is where we expect it to be if things aren't zero'ed out
+/** 
+ * Verify the secret is where we expect it to be if things aren't zero'ed out properly
+ * This implementation uses memset, which should get optimized out. If optimizations aren't enabled,
+ * this test is skipped.
+ */
 static int mem_test_correctness_noclean() {
-  printf("No Clean\t");
 #ifdef __OPTIMIZE__
-  char *buf = mem_test_clean(NULL);
+  char *buf;
+
+  buf = mem_test_clean(NULL);
   
+  printf("%-30s", "No Clean");
   if (0 == memcmp(buf, secret, sizeof(secret))) {
+    // The secret is still present, memset was optimized out (as we predicted)
     printf("PASSED\n");
     return 1;
   } else {
@@ -136,6 +136,7 @@ static int mem_test_correctness_noclean() {
     return 0;
   }
 #else
+  printf("%-30s", "No Clean");
   printf("SKIPPED (no optimizations)\n");
   return 1;
 #endif
@@ -148,9 +149,7 @@ static int mem_test_correctness_clean(enum OQS_MEM_alg_name alg_name, const char
     return 0;
   }
 
-  assert_on_stack();
-
-  printf("%s\t", name);
+  printf("%-30s", name);
 
   char *buf = mem_test_clean(mem_clean);
   
@@ -164,7 +163,6 @@ static int mem_test_correctness_clean(enum OQS_MEM_alg_name alg_name, const char
 }
 
 static int mem_test_bench_clean(enum OQS_MEM_alg_name alg_name, const char *name) {
-
   OQS_MEM_clean_func mem_clean = OQS_MEM_func(alg_name);
   if (mem_clean == NULL) {
     fprintf(stderr, "mem_clean is NULL\n");
@@ -185,7 +183,8 @@ static int mem_test_bench_clean(enum OQS_MEM_alg_name alg_name, const char *name
 
 }
 
-static void mem_test_correctness() {
+static void mem_test_correctness_signal_handler(int arg) {
+  (void)(arg);
   size_t i;
   size_t mem_testcases_len = sizeof(mem_testcases) / sizeof(struct mem_testcase);
 
@@ -213,8 +212,7 @@ int main() {
   size_t i;
   size_t mem_testcases_len = sizeof(mem_testcases) / sizeof(struct mem_testcase);
 
-  setup_stack();
-  call_on_stack(mem_test_correctness);
+  call_on_stack(mem_test_correctness_signal_handler);
 
   for (i = 0; i < mem_testcases_len; i++) {
     success = mem_test_bench_clean(mem_testcases[i].alg_name, mem_testcases[i].name);
